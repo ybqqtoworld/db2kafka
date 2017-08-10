@@ -9,4 +9,12 @@ public class CommonUtil {
 		}
 	}
 
+	public static boolean isEnable(String str) {
+		if (str == null || "".equals(str.trim()) || str.trim().length() == 0) {
+			return false;
+		} else {
+			return true;
+		}
+	}
+
 }
