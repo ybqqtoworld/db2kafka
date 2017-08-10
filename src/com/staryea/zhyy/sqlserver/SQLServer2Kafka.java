@@ -31,6 +31,9 @@ public class SQLServer2Kafka {
 //		String jdbc_conf = System.getProperty("user.dir") + "/config/sqlserver/conf.properties";
 		PropertiesUtil prop = PropertiesUtil.getInstance(jdbc_conf);
 
+		log.info(jdbc_conf);
+		log.info("begin");
+		
 		String sql = prop.getProperty("sql");
 		String kafka_url = prop.getProperty("kafka_url");
 		String splitFlag = prop.getProperty("splitFlag");
@@ -45,8 +48,9 @@ public class SQLServer2Kafka {
 			producer.close();
 			dbconn.close();
 		} catch (Exception e) {
-			e.printStackTrace();
+			log.error("deal error", e);
 		}
+		log.info("end");
 	}
 
 	private static Connection initConn(PropertiesUtil prop) throws Exception {
