@@ -72,7 +72,7 @@ public class Database2Kafka {
 				String sql = MessageFormat.format(prop.getProperty("sql"), params);
 				log.info("last_end_time:" + last_end_time);
 				log.info("next_end_time:" + next_end_time);
-				log.info(sql);
+				log.info("format sql:"+sql);
 
 				// 处理前回写记录表
 				String now_time = sdf.format(new Date());

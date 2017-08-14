@@ -39,7 +39,7 @@ public class PropertiesUtil {
 			while (en.hasMoreElements()) {
 				String name = en.nextElement().toString();
 				String value = prop.getProperty(name);
-				log.info("name:" + name + ",value:" + value);
+				log.info(name + ":" + value);
 				propMap.put(name, value);
 			}
 			in.close();
