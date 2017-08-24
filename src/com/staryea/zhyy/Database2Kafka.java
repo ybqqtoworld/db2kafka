@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Map;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.log4j.PropertyConfigurator;
@@ -51,45 +52,46 @@ public class Database2Kafka {
 		String[] fields = prop.getProperty("fields").split(",");
 		String topic = prop.getProperty("topic");
 		String table = prop.getProperty("table");
+		String start_time = prop.getProperty("start_time");
+		String time_field = prop.getProperty("time_field");
 
-		// 获取上次结束时间
+		// 获取上次取数的最后一条数据的时间
 		Connection meta_conn = null;
 		try {
 			meta_conn = DBConnUtil.getConn(prop.getProperty("meta_driver"), prop.getProperty("meta_url"),
 					prop.getProperty("meta_username"), prop.getProperty("meta_password"));
-			String last_end_time = BussinessUtil.getEndTime(meta_conn, table);
+			String last_record_time = BussinessUtil.getEndTime(meta_conn, table, start_time);
 
 			// 排除正在执行(未执行完)
-			if (!CommonUtil.isEnable(last_end_time)) {
+			if (!CommonUtil.isEnable(last_record_time)) {
 				log.info("execute failure");
 			} else {
-				SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-				Date last_end_time_d = sdf.parse(last_end_time);
-				Date next_end_time_d = new Date(last_end_time_d.getTime() + 180000);
-				String next_end_time = sdf.format(next_end_time_d);
-
-				String params[] = { "'" + last_end_time + "'", "'" + next_end_time + "'" };
+				String params[] = { "'" + last_record_time + "'" };
 				String sql = MessageFormat.format(prop.getProperty("sql"), params);
-				log.info("last_end_time:" + last_end_time);
-				log.info("next_end_time:" + next_end_time);
-				log.info("format sql:"+sql);
+				log.info("last_record_time:" + last_record_time);
+				log.info("format sql:" + sql);
 
 				// 处理前回写记录表
-				String now_time = sdf.format(new Date());
-				BussinessUtil.firstWriteBack(meta_conn, table, last_end_time, next_end_time, now_time);
+				BussinessUtil.firstWriteBack(meta_conn, table, last_record_time);
 
 				Connection dbconn = null;
 				try {
 					dbconn = DBConnUtil.getConn(prop.getProperty("driver"), prop.getProperty("url"),
 							prop.getProperty("username"), prop.getProperty("password"));
 					KafkaProducer<String, String> producer = KafkaConnUtil.createProducer(kafka_url);
-					int count = BussinessUtil.extractData(dbconn, sql, fields, splitFlag, producer, topic);
+					Map<String, String> map = BussinessUtil.extractData(dbconn, sql, fields, time_field, splitFlag,
+							producer, topic);
 					producer.close();
 					dbconn.close();
 
+					int count = Integer.parseInt(map.get("count"));
+					if (count == 0) {
+						map.put("last_record_time", last_record_time);
+					}
+
 					// 处理后回写记录表
-					now_time = sdf.format(new Date());
-					BussinessUtil.successWriteBack(meta_conn, table, last_end_time, next_end_time, now_time, count);
+					BussinessUtil.successWriteBack(meta_conn, table, last_record_time, map.get("last_record_time"),
+							count);
 				} catch (Exception e) {
 					log.error("extract data error", e);
 				}

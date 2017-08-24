@@ -3,6 +3,8 @@ package com.staryea.zhyy.util;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -21,37 +23,29 @@ public class BussinessUtil {
 	* @throws Exception
 	* @return String
 	 */
-	public static String getEndTime(Connection meta_conn, String table) throws Exception {
+	public static String getEndTime(Connection meta_conn, String table, String start_time) throws Exception {
 		String end_time = null;
+		String is_finish = null;
 
-		String sql1 = "select date_format(end_time, '%Y-%m-%d %H:%i:%s') as end_time from ts_control where table_name='"
-				+ table + "' and is_finish=1 order by end_time desc limit 1";
-		PreparedStatement pstmt1 = (PreparedStatement) meta_conn.prepareStatement(sql1);
-		ResultSet rs1 = pstmt1.executeQuery();
+		String sql = "select is_finish,date_format(end_time, '%Y-%m-%d %H:%i:%s') as end_time from ts_control where table_name='"
+				+ table + "' order by end_time desc limit 1";
+		PreparedStatement pstmt = (PreparedStatement) meta_conn.prepareStatement(sql);
+		ResultSet rs = pstmt.executeQuery();
 
-		while (rs1.next()) {
-			end_time = rs1.getString("end_time");
+		if (rs.next()) {
+			log.info("get the last record");
+			end_time = rs.getString("end_time");
+			is_finish = rs.getString("is_finish");
+			if (CommonUtil.isEnable(is_finish) && "0".equals(is_finish)) {
+				log.info("already deal data!");
+				end_time = null;
+			}
+		} else {
+			end_time = start_time;
 		}
 
-		if (!CommonUtil.isEnable(end_time)) {
-			log.info("can not get the last end_time");
-			end_time = null;
-		}
-
-		String sql2 = "select * from ts_control where table_name='" + table
-				+ "' and end_time=(select (select end_time from ts_control where table_name='" + table
-				+ "' and is_finish=1 order by end_time desc limit 1)+INTERVAL 3 MINUTE);";
-		PreparedStatement pstmt2 = (PreparedStatement) meta_conn.prepareStatement(sql2);
-		ResultSet rs2 = pstmt2.executeQuery();
-		if (rs2.next()) {
-			log.info("already dealing the last end_time");
-			end_time = null;
-		}
-
-		rs1.close();
-		pstmt1.close();
-		rs2.close();
-		pstmt2.close();
+		rs.close();
+		pstmt.close();
 		return end_time;
 	}
 
@@ -62,37 +56,50 @@ public class BussinessUtil {
 	* @param dbconn
 	* @param sql
 	* @param fields
+	* @param time_field
 	* @param splitFlag
 	* @param producer
 	* @param topic
 	* @throws Exception
-	* @return void
+	* @return Map
 	 */
-	public static int extractData(Connection dbconn, String sql, String[] fields, String splitFlag,
-			KafkaProducer<String, String> producer, String topic) throws Exception {
+	public static Map<String, String> extractData(Connection dbconn, String sql, String[] fields, String time_field,
+			String splitFlag, KafkaProducer<String, String> producer, String topic) throws Exception {
+		Map<String, String> map = new HashMap<String, String>();
+
 		int count = 0;
+		String last_record_time = "";
+
 		ResultSet rs = null;
 		PreparedStatement pstmt = null;
 		int len = fields.length;
 
-		pstmt = (PreparedStatement) dbconn.prepareStatement(sql);
+		pstmt = (PreparedStatement) dbconn.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE,
+				ResultSet.CONCUR_READ_ONLY);
 		log.info(sql);
 		rs = pstmt.executeQuery();
 		while (rs.next()) {
-			count++;
 			StringBuffer sb = new StringBuffer();
 			for (int i = 0; i < len; i++) {
 				sb.append(rs.getObject(fields[i]) + splitFlag);
 			}
+
+			if (rs.isLast()) {
+				last_record_time = rs.getObject(time_field).toString();
+			}
+
 			String msg = sb.substring(0, sb.length() - 1);
-			log.info("topic:" + topic + ",msg:" + msg);
+			// log.info("topic:" + topic + ",msg:" + msg);
 			ProducerRecord<String, String> record = new ProducerRecord<String, String>(topic, msg);
 			producer.send(record);
+			count++;
 		}
 
 		rs.close();
 		pstmt.close();
-		return count;
+		map.put("count", count + "");
+		map.put("last_record_time", last_record_time);
+		return map;
 	}
 
 	/**
@@ -103,20 +110,16 @@ public class BussinessUtil {
 	* @param table
 	* @param start_time
 	* @param end_time
-	* @param execute_time
 	* @throws Exception
 	* @return boolean
 	 */
-	public static boolean firstWriteBack(Connection meta_conn, String table, String start_time, String end_time,
-			String execute_time) throws Exception {
-		String sql = "insert into ts_control (table_name,start_time,end_time,is_finish,execute_time) value (?,?,?,?,?)";
+	public static boolean firstWriteBack(Connection meta_conn, String table, String start_time) throws Exception {
+		String sql = "insert into ts_control (table_name,start_time,is_finish) value (?,?,?)";
 		log.info("insert new extract record:" + sql);
 		PreparedStatement pstmt = (PreparedStatement) meta_conn.prepareStatement(sql);
 		pstmt.setString(1, table);
 		pstmt.setString(2, start_time);
-		pstmt.setString(3, end_time);
-		pstmt.setString(4, "0");
-		pstmt.setString(5, execute_time);
+		pstmt.setString(3, "0");
 		boolean res = pstmt.execute();
 		pstmt.close();
 		return res;
@@ -130,16 +133,14 @@ public class BussinessUtil {
 	* @param  table 抽取数据的表
 	* @param  start_time 开始时间
 	* @param  end_time 结束时间
-	* @param  finsh_time 完成时间
 	* @param count 数据条数
 	* @throws Exception
 	* @return boolean
 	 */
 	public static boolean successWriteBack(Connection meta_conn, String table, String start_time, String end_time,
-			String finsh_time, int count) throws Exception {
-		String sql = "update ts_control set finish_time='" + finsh_time + "',is_finish='1',num=" + count
-				+ " where table_name='" + table + "' and start_time='" + start_time + "' and end_time='" + end_time
-				+ "'";
+			int count) throws Exception {
+		String sql = "update ts_control set end_time='" + end_time + "',is_finish='1',num=" + count
+				+ " where table_name='" + table + "' and start_time='" + start_time + "'";
 		log.info("update success extract record:" + sql);
 		PreparedStatement pstmt = (PreparedStatement) meta_conn.prepareStatement(sql);
 		boolean res = pstmt.execute();
